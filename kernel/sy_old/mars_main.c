@@ -875,6 +875,7 @@ struct mars_rotate {
 	int retry_log_from;
 	int retry_recovery;
 	int max_sequence;
+	int flip_round;
 	int fetch_round;
 	int fetch_serial;
 	int fetch_next_serial;
@@ -3771,6 +3772,67 @@ int kill_any(struct mars_dent *dent)
 	return 1;
 }
 
+/*********************************************************************/
+
+/* launching peer threads from external, e.g. /proc */
+
+struct launch_info {
+	struct list_head launch_head;
+	const char *peer_name;
+	const char *peer_ip;
+	const char *rebase_dir;
+	bool oneshot;
+};
+
+static DECLARE_RWSEM(launch_lock);
+static
+struct list_head launch_anchor = LIST_HEAD_INIT(launch_anchor);
+
+void launch_peer(const char *peer_name,
+		 const char *peer_ip,
+		 const char *rebase_dir,
+		 bool oneshot)
+{
+	struct launch_info *launch;
+
+	if (!mars_net_is_alive)
+		return;
+
+	launch = brick_zmem_alloc(sizeof(struct launch_info));
+	INIT_LIST_HEAD(&launch->launch_head);
+	launch->peer_name  = brick_strdup(peer_name);
+	if (peer_ip)
+		launch->peer_ip    = brick_strdup(peer_ip);
+	if (rebase_dir)
+		launch->rebase_dir = brick_strdup(rebase_dir);
+	launch->oneshot    = oneshot;
+	down_write(&launch_lock);
+	list_add_tail(&launch->launch_head, &launch_anchor);
+	up_write(&launch_lock);
+}
+
+static
+void launch_all(bool cleanup)
+{
+	down_write(&launch_lock);
+	while (!list_empty(&launch_anchor)) {
+		struct launch_info *launch;
+
+		launch = container_of(launch_anchor.next, struct launch_info, launch_head);
+		list_del_init(&launch->launch_head);
+		if (!cleanup && mars_net_is_alive)
+			activate_peer(launch->peer_name,
+				      launch->peer_ip,
+				      launch->rebase_dir,
+				      launch->oneshot);
+		brick_string_free(launch->peer_name);
+		brick_string_free(launch->peer_ip);
+		brick_string_free(launch->rebase_dir);
+		brick_mem_free(launch);
+	}
+	up_write(&launch_lock);
+}
+
 ///////////////////////////////////////////////////////////////////////
 
 // handlers / helpers for logfile rotation
@@ -6197,17 +6259,31 @@ static int make_sync(struct mars_dent *dent)
 	if (do_start && rot->replay_mode && rot->end_pos > rot->start_pos &&
 	    mars_sync_flip_interval >= 8) {
 		if (!rot->flip_start) {
-			rot->flip_start = jiffies;
-			rot->flip_pos = rot->start_pos;
+			/* Give replay a fair chance to jump in, even when
+			 * multiple logrotates are necessary, or when
+			 * logfiles are damaged, etc.
+			 * Exception: the current logfile cannot be freed
+			 * anyway.
+			 */
+			if (!rot->next_relevant_log ||
+			    rot->flip_round++ > 3) {
+				rot->flip_start = jiffies;
+				rot->flip_pos = rot->start_pos;
+				rot->flip_round = 0;
+			}
+			do_start = false;
+			mars_trigger();
 		} else if ((long long)jiffies - rot->flip_start > mars_sync_flip_interval * HZ &&
 			   rot->sync_brick &&
 			   rot->sync_brick->copy_last > rot->flip_pos) {
 			do_start = false;
-			rot->flip_start = jiffies + mars_sync_flip_interval * HZ;
+			rot->flip_start = 0;
+			rot->flip_round = 0;
 			mars_trigger();
 		}
 	} else {
 		rot->flip_start = 0;
+		rot->flip_round = 0;
 	}
 
  shortcut:
@@ -7025,7 +7101,8 @@ int main_checker(struct mars_dent *parent,
 		if (prefix)
 			*prefix = len;
 		if (test->cl_hostcontext) {
-			if (memcmp(name+len, my_id(), namlen-len)) {
+			if (namlen-len != my_id_len() ||
+			    memcmp(name+len, my_id(), namlen-len)) {
 				continue;
 			}
 		}
@@ -7199,7 +7276,12 @@ static int _main_thread(void *data)
 		if (!say_status)
 			init_say();
 
-		MARS_DBG("-------- NEW ROUND %d ---------\n", atomic_read(&server_handler_count));
+		MARS_DBG("-------- %d/%d NEW ROUND %d %d %d ---------\n",
+			 mars_global->global_power.button,
+			 mars_net_is_alive,
+			 atomic_read(&server_handler_count),
+			 peer_count,
+			 !list_empty(&mars_global->brick_anchor));
 
 		/* Static memlimit */
 		if (mars_mem_percent < 0)
@@ -7345,6 +7427,7 @@ static int _main_thread(void *data)
 		/* main_round point */
 		main_round++;
 		wake_up_interruptible_all(&main_round_event);
+		launch_all(false);
 
 		brick_msleep(100);
 
@@ -7390,6 +7473,8 @@ done:
 
 	brick_string_free(_tmp_oneshot_peer);
 	brick_string_free(oneshot_peer);
+
+	launch_all(true);
 
 	MARS_INF("-------- done status = %d ----------\n", status);
 	//cleanup_mm();

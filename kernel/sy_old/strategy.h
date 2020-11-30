@@ -39,8 +39,9 @@
  * 2 = push operation available
  * 3 = new alivelinks residing in /mars/actual-$host
  * 4 = new join-cluster and random peer threads
+ * 5 = fix race on peer thread creation
  */
-#define OPTIONAL_STRATEGY_VERSION 4
+#define OPTIONAL_STRATEGY_VERSION 5
 
 /* transient, to re-disappear */
 extern int compat_deletions;
@@ -84,13 +85,14 @@ extern int mars_test_additional_peers;
 extern void invalidate_user_cache(void);
 
 extern char *my_id(void);
+extern int   my_id_len(void);
 extern const char *my_uuid;
 
 extern void wait_main_round(void);
-extern void activate_peer(const char *peer_name,
-			  const char *peer_ip,
-			  const char *rebase_dir,
-			  bool oneshot);
+extern void launch_peer(const char *peer_name,
+			const char *peer_ip,
+			const char *rebase_dir,
+			bool oneshot);
 
 struct mars_dent;
 typedef void (*dent_skip_fn)(struct mars_dent *);

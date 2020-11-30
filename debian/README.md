@@ -141,3 +141,203 @@ root@plug:/home/user# dmesg  | tail
 [44414.526621] lz4      compress duration =     40000900 ns
 [44415.499954] zlib     compress duration =    976021964 ns
 ```
+
+Create and join a cluster:
+
+```
+root@istore-test-bap7:~# marsadm join-cluster istore-test-bs7
+DYING: cannot create symlink '/mars/actual-istore-test-bap7/marsadm-version' -> '2.9'
+FAILURE cmd='join-cluster' res='istore-test-bs7'
+
+root@istore-test-bap7:~# marsadm join-cluster --ip=192.168.33.20 istore-test-bs7   
+Using IP '192.168.33.20' from command line for 'istore-test-bap7'.
+DYING: Cannot determine foreign IP for peer 'istore-test-bs7'
+FAILURE cmd='join-cluster' res='istore-test-bs7'
+
+
+root@istore-test-bap7:~# marsadm join-cluster --ip=192.168.33.20 istore-test-bs7
+Using IP '192.168.33.20' from command line for 'istore-test-bap7'.
+DNS query for 'istore-test-bs7' found IPv4 address '192.168.33.10'
+MARS kernel module is loaded, trying the new join-cluster method.
+Update local 'istore-test-bap7' information
+Ping istore-test-bap7 trigger=8
+Wait for answers from istore-test-bap7
+WARNING: Need restart for getting more 'time' links
+Ping istore-test-bap7 trigger=8
+Wait for answers from istore-test-bap7
+1/1 peer(s) seem to be alive
+Checking uuid
+... update from istore-test-bs7 round 1
+Ping istore-test-bs7 trigger=8
+Wait for answers from istore-test-bs7
+1/1 peer(s) seem to be alive
+Successfully joined cluster, uuid='istore-test-bs7 Mon Nov 30 03:07:42 GMT 2020'
+```
+
+
+```
+WARNING: resource qualifier 'all' does not match any resource or guest names
+root@istore-test-bap7:/mars# marsadm join-resource bar /dev/loop1
+OK, resource directory '/mars/resource-bar' exists.
+Ping istore-test-bap7 trigger=2
+Wait for answers from istore-test-bap7
+1/1 peer(s) seem to be alive
+Ping * trigger=8
+Wait for answers from istore-test-bs7
+1/1 peer(s) seem to be alive
+joining to existing resource 'bar'
+block device '/dev/loop1': determined size = 1073741824 bytes
+OK, resource directory '/mars/resource-bar' exists.
+Ping * trigger=3
+Wait for answers from istore-test-bs7
+1/1 peer(s) seem to be alive
+found replay link '/mars/resource-bar/replay-istore-test-bs7' -> 'log-000000002-istore-test-bs7,0,0'
+found replay link '/mars/resource-bar/replay-istore-test-bs7' -> 'log-000000002-istore-test-bs7,0,0'
+checking 'version-000000001-istore-test-bs7'
+  corresponding logfile is 'log-000000001-istore-test-bs7'
+  ok 'version-000000001-istore-test-bs7'
+checking 'version-000000002-istore-test-bs7'
+  corresponding logfile is 'log-000000002-istore-test-bs7'
+  ok 'version-000000002-istore-test-bs7'
+info: logfile 'log-000000001-istore-test-bs7' is referenced (1), but not present.
+info: logfile 'log-000000002-istore-test-bs7' is referenced (1), but not present.
+  Unreferenced logfiles are not necessarily bad.
+  They can regularly appear after 'leave-resource',
+  or 'invalidate', or after emergency mode,
+  or after similar operations.
+waiting for deletions to apply locally....
+using existing device '/dev/loop1'
+resource 'bar' will appear as local device '/dev/mars/bar'
+creating new replaylink '/mars/resource-bar/replay-istore-test-bap7' -> 'log-000000002-istore-test-bs7,0,0'
+Creating new versionlink '/mars/resource-bar/version-000000002-istore-test-bap7' -> 'e01d67655265eb5853501277ecd89d13,log-000000002-istore-test-bs7,0:7208f7b776ce4801c1a0da69e8bc635d,log-000000001-istore-test-bs7,69872880'
+Creating new versionlink '/mars/resource-bar/version-000000001-istore-test-bap7' -> '7208f7b776ce4801c1a0da69e8bc635d,log-000000001-istore-test-bs7,69872880:'
+Ping istore-test-bs7 trigger=2
+Wait for answers from istore-test-bs7
+1/1 peer(s) seem to be alive
+Ping istore-test-bs7 trigger=2
+Wait for answers from istore-test-bs7
+1/1 peer(s) seem to be alive
+Connection to 127.0.0.1 closed by remote host.
+Connection to 127.0.0.1 closed.
+```
+
+
+Leaving resource:
+
+```
+root@istore-test-bap7:~# marsadm leave-resource all
+-------- PHASE 1 -------- check preconditions:
+--------- resource bar 1024.000 MiB [2/2]
+OK at istore-test-bap7: '/mars/resource-bar/actual-istore-test-bap7/is-attached' has acceptable value '0'
+-------- PHASE 2 -------- switch state:
+--------- resource bar 1024.000 MiB [2/2]
+-------- PHASE 3 -------- purge logfiles:
+--------- resource bar 1024.000 MiB [2/2]
+waiting for deletions to apply locally....
+found replay link '/mars/resource-bar/replay-istore-test-bs7' -> 'log-000000002-istore-test-bs7,279483160,0'
+found replay link '/mars/resource-bar/replay-istore-test-bs7' -> 'log-000000002-istore-test-bs7,279483160,0'
+checking 'version-000000001-istore-test-bs7'
+  corresponding logfile is 'log-000000001-istore-test-bs7'
+  ok 'version-000000001-istore-test-bs7'
+checking 'version-000000002-istore-test-bs7'
+  corresponding logfile is 'log-000000002-istore-test-bs7'
+  ok 'version-000000002-istore-test-bs7'
+info: logfile 'log-000000001-istore-test-bs7' is referenced (1), but not present.
+info: logfile 'log-000000002-istore-test-bs7' is referenced (1), but not present.
+  Unreferenced logfiles are not necessarily bad.
+  They can regularly appear after 'leave-resource',
+  or 'invalidate', or after emergency mode,
+  or after similar operations.
+-------- PHASE 4 -------- wait for deletions:
+WARNING: resource qualifier 'all' does not match any resource or guest names
+
+root@istore-test-bap7:~# marsadm leave-cluster
+Ping * trigger=3
+Wait for answers from istore-test-bs7
+1/1 peer(s) seem to be alive
+Ping * trigger=3
+Wait for answers from istore-test-bs7
+1/1 peer(s) seem to be alive
+Ping * trigger=3
+Wait for answers from istore-test-bs7
+1/1 peer(s) seem to be alive
+```
+
+
+
+PANIC
+```
+root@istore-test-bap7:~# marsadm leave-resource bar
+-------- PHASE 1 -------- check preconditions:
+OK at istore-test-bap7: '/mars/resource-bar/actual-istore-test-bap7/is-attached' has acceptable value '0'
+-------- PHASE 2 -------- switch state:
+-------- PHASE 3 -------- purge logfiles:
+waiting for deletions to apply locally....
+found replay link '/mars/resource-bar/replay-istore-test-bs7' -> 'log-000000003-istore-test-bs7,0,0'
+found replay link '/mars/resource-bar/replay-istore-test-bs7' -> 'log-000000003-istore-test-bs7,0,0'
+checking 'version-000000002-istore-test-bs7'
+  corresponding logfile is 'log-000000002-istore-test-bs7'
+  ok 'version-000000002-istore-test-bs7'
+checking 'version-000000003-istore-test-bs7'
+  corresponding logfile is 'log-000000003-istore-test-bs7'
+  ok 'version-000000003-istore-test-bs7'
+info: logfile 'log-000000002-istore-test-bs7' is referenced (1), but not present.
+info: logfile 'log-000000003-istore-test-bs7' is referenced (1), but not present.
+  Unreferenced logfiles are not necessarily bad.
+  They can regularly appear after 'leave-resource',
+  or 'invalidate', or after emergency mode,
+  or after similar operations.
+-------- PHASE 4 -------- wait for deletions:
+waiting for deletions to apply locally....
+systemd unit 'mars-trigger.path' is not existing or not enabled.
+root@istore-test-bap7:~# marsadm join-resource bar /de^C
+root@istore-test-bap7:~# losetup 
+NAME       SIZELIMIT OFFSET AUTOCLEAR RO BACK-FILE         DIO
+/dev/loop0         0      0         0  0 /home/vagrant/foo   0
+root@istore-test-bap7:~# losetup -f bar 
+root@istore-test-bap7:~# losetup 
+NAME       SIZELIMIT OFFSET AUTOCLEAR RO BACK-FILE         DIO
+/dev/loop1         0      0         0  0 /root/bar           0
+/dev/loop0         0      0         0  0 /home/vagrant/foo   0
+root@istore-test-bap7:~# marsadm join-resource bar /dev/loop1
+OK, resource directory '/mars/resource-bar' exists.
+Ping istore-test-bap7 trigger=2
+Wait for answers from istore-test-bap7
+1/1 peer(s) seem to be alive
+Ping * trigger=8
+Wait for answers from istore-test-bs7
+1/1 peer(s) seem to be alive
+joining to existing resource 'bar'
+block device '/dev/loop1': determined size = 1073741824 bytes
+OK, resource directory '/mars/resource-bar' exists.
+Ping * trigger=3
+Wait for answers from istore-test-bs7
+1/1 peer(s) seem to be alive
+found replay link '/mars/resource-bar/replay-istore-test-bs7' -> 'log-000000003-istore-test-bs7,0,0'
+found replay link '/mars/resource-bar/replay-istore-test-bs7' -> 'log-000000003-istore-test-bs7,0,0'
+checking 'version-000000002-istore-test-bs7'
+  corresponding logfile is 'log-000000002-istore-test-bs7'
+  ok 'version-000000002-istore-test-bs7'
+checking 'version-000000003-istore-test-bs7'
+  corresponding logfile is 'log-000000003-istore-test-bs7'
+  ok 'version-000000003-istore-test-bs7'
+info: logfile 'log-000000002-istore-test-bs7' is referenced (1), but not present.
+info: logfile 'log-000000003-istore-test-bs7' is referenced (1), but not present.
+  Unreferenced logfiles are not necessarily bad.
+  They can regularly appear after 'leave-resource',
+  or 'invalidate', or after emergency mode,
+  or after similar operations.
+waiting for deletions to apply locally....
+using existing device '/dev/loop1'
+resource 'bar' will appear as local device '/dev/mars/bar'
+creating new replaylink '/mars/resource-bar/replay-istore-test-bap7' -> 'log-000000003-istore-test-bs7,0,0'
+Creating new versionlink '/mars/resource-bar/version-000000003-istore-test-bap7' -> 'a64424bd50695f2557c1b83bbd317cb5,log-000000003-istore-test-bs7,0:8728a48cf769fd147be6683e3b8d6d59,log-000000002-istore-test-bs7,279483160'
+Creating new versionlink '/mars/resource-bar/version-000000002-istore-test-bap7' -> '8728a48cf769fd147be6683e3b8d6d59,log-000000002-istore-test-bs7,279483160:7208f7b776ce4801c1a0da69e8bc635d,log-000000001-istore-test-bs7,69872880'
+Ping istore-test-bs7 trigger=2
+Wait for answers from istore-test-bs7
+1/1 peer(s) seem to be alive
+Ping istore-test-bs7 trigger=2
+Wait for answers from istore-test-bs7
+Connection to 127.0.0.1 closed by remote host.
+Connection to 127.0.0.1 closed.
+```

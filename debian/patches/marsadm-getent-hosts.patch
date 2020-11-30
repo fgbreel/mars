@@ -1,0 +1,20 @@
+--- a/userspace/marsadm
++++ b/userspace/marsadm
+@@ -191,7 +191,7 @@
+ 
+ # global variables
+ 
+-my $Id = '$Id: 71afff7bc18c62a1d8e23dc4c64217bff2ad88da $ ';
++my $Id = '$Id: 740100b52de35d7b99fdd48d7fb98d02db12f30d $ ';
+ my $user_version = 0.1;
+ my $marsadm_version = 2.9; # some rough hint at newer features
+ my $mars = "/mars";
+@@ -3563,7 +3563,7 @@
+     }
+   }
+   # Try /usr/bin/host
+-  my $answer = `/usr/bin/host -t A $peer`;
++  my $answer = `/usr/bin/getent hosts $peer`;
+   if ($answer && $answer =~ m/([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)/) {
+     my $addr = $1;
+     lprint_stderr "DNS query for '$peer' found IPv4 address '$addr'\n";
