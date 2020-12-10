@@ -1892,7 +1892,7 @@ sub get_global_versions {
     }
   }
   # can ssh be switched off?
-  if ($kernel_strategy_version >= 4) {
+  if ($kernel_strategy_version >= 5) {
     $ssh_port = 0;
   }
   # determine cluster-wide $compat_* values
@@ -2096,16 +2096,18 @@ sub wait_cond {
 
 # wait until everything is recent
 sub wait_cluster {
-  my $cmd = shift;
-  my $res = shift;
+  my ($cmd, $res, $hosts, $abort, $trigger_code, $condition) = @_;
   $res = "all" if (!$res || $res =~ m/,/);
-  my $hosts = shift || "*";
-  my $abort = shift;
+  $hosts = "*" unless $hosts;
   $abort = $force unless defined($abort);
-  my $trigger_code = shift || ($hosts =~ m/\*/ ? 3 : 2);
+  $trigger_code = ($hosts =~ m/\*/ ? 3 : 2) unless $trigger_code;
   my $non_participating = ($trigger_code >= 8);
   $timeout_val = undef;
+  get_global_versions();
   finish_links();
+  if ($hosts eq $real_host && $kernel_strategy_version >= 5) {
+    return 0;
+  }
   my $max_restarts = 3;
   my $max_resets = 1;
  restart:
@@ -2126,6 +2128,12 @@ sub wait_cluster {
   }
   my $delta = $window > 0 ? $window / 2 : 30;
   while (1) {
+    # Early abort when condition is met
+    if ($condition) {
+      my $status = eval($condition);
+      lprint "Condition '$condition' status=$status\n" if $verbose;
+      return $status if $status;
+    }
     my $dead_count = 0;
     my $alive_count = 0;
     my $unknown_count = 0;
@@ -2185,6 +2193,7 @@ sub wait_cluster {
     sleep_timeout(1, 1);
     last if $timeout_val <= 0 && !$unknown_count;
   }
+  return 0;
 }
 
 sub wait_cluster_noforce {
@@ -2196,13 +2205,13 @@ sub wait_cluster_noforce {
 }
 
 sub update_cluster {
-  my $cmd = shift;
-  my $res = shift;
+  my ($cmd, $res, $hosts, $condition) = @_;
   $res = "all" if (!$res || $res =~ m/,/);
-  my $hosts = shift || "*";
+  $hosts = "*" unless $hosts;
   lprint "UPDATING $res\n" if $verbose;
-  wait_cluster($cmd, $res, $hosts, 0, 8);
+  my $status = wait_cluster($cmd, $res, $hosts, 0, 8, $condition);
   _reset_resources();
+  return $status;
 }
 
 sub is_cluster_recent {
@@ -2241,17 +2250,17 @@ sub recent_cluster {
 # Activate such a resource as a guest.
 sub _activate_resource {
   my ($cmd, $res, $peer) = @_;
-  return unless $res;
   $peer = $host unless $peer;
   finish_links();
-  if ($res eq "*" || $res eq "all") {
-    update_cluster($cmd, $res);
+  if (!$res || $res eq "*" || $res eq "all") {
+    lwarn "no usable resource to activate ($res).\n";
     return;
   }
   my $resdir = "$mars/resource-$res";
   my $max_retry = 3;
   until (-d $resdir) {
-    update_cluster($cmd, $res);
+    my $condition = "return -d \"$resdir\";";
+    update_cluster($cmd, $res, "*", $condition);
     last if -d $resdir;
     if ($max_retry-- < 0) {
       ldie "Resource directory '$resdir' does not exist\n";
@@ -2260,6 +2269,18 @@ sub _activate_resource {
     sleep(3);
   }
   lprint "OK, resource directory '$resdir' exists.\n";
+  my $check_link = "$resdir/size";
+  $max_retry = 3;
+  until (get_link($check_link, 1)) {
+    my $condition = "return get_link(\"$check_link\", 1);";
+    update_cluster($cmd, $res, "*", $condition);
+    if ($max_retry-- < 0) {
+      ldie "link '$check_link' does not exist.\n";
+    }
+    lwarn "link '$check_link' does not yet exist, fetching...\n";
+    sleep(3);
+  }
+  lprint "OK, link '$check_link' exists.\n";
   my $active_path = "$resdir/device-$peer";
   my $check = get_link($active_path, 2);
   if ($check) {
@@ -2267,33 +2288,52 @@ sub _activate_resource {
       _push_check($peer, "", $resdir);
       _push_check($peer, "", $active_path);
     }
-    lprint "Resource '$res' was already activated at '$peer'\n" if $verbose;
+    lprint "Resource '$res' was already activated at '$peer'\n";
     return;
   }
-  lprint "ENABLING resource '$res' at '$peer'\n" if $verbose;
+  lprint "ENABLING resource '$res' at '$peer'\n";
   # Ensure guest communication: a faked device-$peer must exist
   # for activation.
-  # Notice: this will be later overwritten with the final value.
-  set_link("(none)", $active_path);
+  # Notice: this may be later overwritten with another value.
+  set_link($res, $active_path);
   # prevent fallback to old device detection
   my $actual_dir = "$resdir/actual-$peer";
   mkdir($actual_dir);
   my $if_path = "$actual_dir/if-on";
   set_link("0", $if_path);
-  # Make PRELIMINARY links, timestamp is 1 second after the Big Bang (1970)
-  # Thanks to Lamport, this will turn into a NOP when a link already exists.
-  finish_links(1);
+  finish_links();
   _push_check($peer, "", $active_path) if $peer ne $real_host;
   # wait for (self-)activation
   wait_cluster($cmd, $res, $peer, 0);
   # activated peers might have changed
-  _trigger(3);
-  update_cluster($cmd, $res, "*", 0);
+  my $primary = _get_designated_primary($res, 1);
+  for (my $retry = 3; $retry >= 0; $retry--) {
+    _trigger(3);
+    my $condition = "return _get_designated_primary(\"$res\", 1);";
+    my $from = ($primary && $primary ne "(none)") ? $primary : "*";
+    my $old_primary = $primary;
+    $primary = update_cluster($cmd, $res, $from, $condition);
+    last if ($primary && $primary eq $old_primary);
+    sleep(3);
+  }
 }
 
-sub activate_resource {
-  my ($cmd, $res) = @_;
+sub activate_guest {
+  my ($cmd, $res, $peer) = @_;
+  $peer = $host unless $peer;
+  my $resdir = "$mars/resource-$res";
+  if ($cmd =~ m/deactivate/) {
+    ldie "resource directory '$resdir' does not exist.\n" unless -d $resdir;
+    my $check_glob = "$resdir/*{data,replay}-$peer";
+    if (lamport_glob($check_glob)) {
+      ldie "peer '$peer' ist a storage member of resource '$res'\n";
+    }
+    my $guest_path = "$resdir/device-$peer";
+    _create_delete($guest_path);
+    return;
+  }
   _activate_resource($cmd, $res);
+  ldie "Could not get resource name '$res'\n" unless -d $resdir;
 }
 
 ##################################################################
@@ -3061,9 +3101,10 @@ sub log_purge_res {
     my $replay = "$basedir/replay-$peer";
     my $target = get_link($replay, 1);
     next unless $target;
-    $situation{$replay} = $target;
     lprint "found replay link '$replay' -> '$target'\n";
+    # only the logfile number is relevant, not the positions
     $target =~ s/,.*//;
+    $situation{$replay} = $target;
     $start_logs{$target}++;
     $start_count++;
     _mark_path_transitive($basedir, $target, $peer);
@@ -3127,6 +3168,8 @@ sub log_purge_res {
   foreach my $replay (sort keys(%situation)) {
     my $old_situation = $situation{$replay};
     my $target = get_link($replay, 1);
+    # only the logfile number is relevant, not the positions
+    $target =~ s/,.*//;
     if (!$target || $target ne $old_situation) {
       lwarn "Race on '$replay' -> '$target' instead of '$old_situation'\n";
       $nr_races++;
@@ -3135,6 +3178,7 @@ sub log_purge_res {
   if ($nr_races) {
     if ($max_retry-- > 0) {
       lwarn "Restarting due to $nr_races races\n";
+      sleep(1);
       goto retry;
     }
     ldie "Detected $nr_races, the situation is not stable\n";
@@ -3792,20 +3836,25 @@ sub create_uuid {
   lprint "New cluster UUID is '$uuid'\n";
 }
 
-sub _create_cluster {
+sub _create_dirs {
   my ($cmd) = @_;
-  ldie "The $mars directory does not exist.\n" unless -d $mars;
-  my $ip = _get_ip($host);
-  create_uuid(@_) if $cmd eq "create-cluster";
   system("mkdir $mars/ips") unless -d "$mars/ips";
   system("mkdir $mars/userspace") unless -d "$mars/userspace";
   system("mkdir $mars/defaults") unless -d "$mars/defaults";
   system("mkdir $mars/defaults-$host") unless -d "$mars/defaults-$host";
-  set_link("0", "$mars/defaults-$host/sync-limit");
-  set_link("(none)", "$mars/defaults-$host/sync-pref-list");
   system("mkdir $mars/todo-global") unless -d "$mars/todo-global";
   mkdir("$mars/actual-$host") unless -d "$mars/actual-$host";
   set_link($marsadm_version, "$mars/actual-$host/marsadm-version");
+}
+
+sub _create_cluster {
+  my ($cmd) = @_;
+  ldie "The $mars directory does not exist.\n" unless -d $mars;
+  my $ip = _get_ip($host);
+  _create_dirs($cmd);
+  create_uuid(@_) if $cmd eq "create-cluster";
+  set_link("0", "$mars/defaults-$host/sync-limit");
+  set_link("(none)", "$mars/defaults-$host/sync-pref-list");
   set_link($ip, "$mars/ips/ip-$host");
   set_link("1", "$mars/todo-global/deleted-$host");
 }
@@ -3825,7 +3874,7 @@ sub join_cluster {
     lwarn "DANGER: some resources already exist!\n";
     ldie  "DANGER: If you are sure that no resource clash is possible, re-invoke $cmd with '--force' option\n" unless $force;
   }
-  set_link($marsadm_version, "$mars/actual-$host/marsadm-version");
+  _create_dirs($cmd);
   $peer_ip = _get_ip($peer) unless $peer_ip;
   # try new join method
   if (is_module_loaded()) {
@@ -4259,11 +4308,12 @@ sub create_res {
     # For safety, try to get the very newest infos.
     # Reason: newer kernel modules will fetch non-member resource infos less frequently.
     # Therefore we shift some responsibility for non-member -> member transitions to userspace.
+    $primary = _get_designated_primary($res, 1);
     for (my $retry = 0; $retry < 3; $retry++) {
-      $primary = _get_designated_primary($res, 1);
       last if (defined($primary) && $primary);
       lprint "Trying to get primary info\n";
-      update_cluster($cmd, $res, "*");
+      my $condition = "return _get_designated_primary(\"$res\", 1);";
+      $primary = update_cluster($cmd, $res, "*", $condition);
     }
     my $max_retry = 5;
     for (;;) {
@@ -5000,6 +5050,7 @@ sub _get_min_time {
     my %status = get_alive_links($res, "time", "*");
     foreach my $peer (keys(%status)) {
       my $stamp = $status{$peer};
+      $stamp = 0 if (!defined($stamp) || $stamp eq "");
       $min_time = $stamp if $stamp < $min_time;
     }
     # protect against dead / decommissioned peers
@@ -5078,6 +5129,7 @@ sub link_purge_global {
   }
   lprint "removing left-over symlinks...\n" if $verbose;
   # remove any old alivelinks
+  get_global_versions();
   my $kernel_compat = get_alive_link("compat-alivelinks", $host, 2);
   # only when a new kernel is running
   if (defined($kernel_compat) && $kernel_compat ne "") {
@@ -8176,9 +8228,6 @@ my %cmd_table =
        "After the initial full sync has finished, the current host will",
        "act in secondary role.",
        "For details on size constraints etc, refer to the PDF manual.",
-       [
-	\&activate_resource,
-       ],
        \&create_res,
       ],
    "leave-resource"
@@ -8406,7 +8455,6 @@ my %cmd_table =
        "verbose 1",
        "usage: set-link <path> <value>",
        "Only for experts.",
-       "Will disappear in a future MARS release.",
        \&set_link_cmd,
       ],
    "get-link"
@@ -8414,7 +8462,6 @@ my %cmd_table =
        "verbose 1",
        "usage: get-link <path>",
        "Only for experts.",
-       "Will disappear in a future MARS release.",
        \&set_link_cmd,
       ],
    "set-sync-limit-value"
@@ -8569,6 +8616,23 @@ my %cmd_table =
        "NOTICE: this is extremely useful for avoiding races when scripting",
        "in a cluster.",
        \&update_cluster,
+      ],
+   "activate-guest"
+   => [
+       "usage: activate-guest <resource_name>",
+       "Conditional update-cluster, so that <resource_name> will be locally",
+       "known at the local machine, and mark the resource as a guest.",
+       "Useful inbetween create-resource and join-resource.",
+       "A guest will receive any symlink updates much more frequently.",
+       "Prefer this over update-cluster when interested in a resource.",
+       \&activate_guest,
+      ],
+   "deactivate-guest"
+   => [
+       "usage: deactivate-guest <resource_name>",
+       "Precondition: the resource must not have local storage assigned.",
+       "Useful for cleaning up a pure guest relastionship.",
+       \&activate_guest,
       ],
 
    # compatible keywords (or their derivatives)
@@ -9350,7 +9414,7 @@ sub do_one_res {
   if ($cmd =~ m/^cat|^set-global-|-file$|-list$|-link$|-value$/) { # no resource argument
   } elsif (!$checked_res{"$cmd$res"}) {
     $res = check_res($res) unless (!$res || $cmd =~ m/^(join|create|merge|leave|wait)-cluster|(create|join)-resource|show/);
-    check_res_member($cmd, $res) unless (!$res || $cmd =~ m/^(join|create|delete)-(cluster|resource)|^(merge|leave|wait)-cluster|-purge-|^show|^view/);
+    check_res_member($cmd, $res) unless (!$res || $cmd =~ m/^(join|create|delete)-(cluster|resource)|^(merge|leave|wait)-cluster|activate-guest|-purge-|^show|^view/);
     detect_splitbrain($res, 1);
     $checked_res{"$cmd$res"} = 1;
   }
