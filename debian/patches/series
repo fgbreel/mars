@@ -1,2 +1,2 @@
-marsadm-getent-hosts.patch
-debug.patch
+Kbuild.patch
+makefile.patch
